@@ -1,11 +1,11 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 import os
 import sqlite3
 import datetime
 import csv
 import io
 import pytz
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 DB_PATH = 'budget_bot.db'
 DEFAULT_CATEGORIES = [
@@ -47,9 +47,9 @@ def init_db():
         CREATE TABLE IF NOT EXISTS budgets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
-            month TEXT, -- YYYY-MM
+            month TEXT,
             category TEXT,
-            limit REAL
+            budget_limit REAL
         )
     ''')
     conn.commit()
@@ -61,7 +61,6 @@ def ensure_user(user_id, chat_id):
     cur.execute('SELECT 1 FROM users WHERE user_id=?', (user_id,))
     if not cur.fetchone():
         cur.execute('INSERT INTO users(user_id, chat_id, created_at) VALUES (?,?,?)', (user_id, chat_id, now_iso()))
-        # add default categories
         for cat in DEFAULT_CATEGORIES:
             cur.execute('INSERT OR IGNORE INTO categories(user_id, name) VALUES (?,?)', (user_id, cat))
         conn.commit()
@@ -137,7 +136,8 @@ async def add_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ts = now_iso()
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute('INSERT INTO transactions(user_id, ts, amount, category, note) VALUES (?,?,?,?,?)', (user.id, ts, -abs(amount), category, note))
+    cur.execute('INSERT INTO transactions(user_id, ts, amount, category, note) VALUES (?,?,?,?,?)', 
+                (user.id, ts, -abs(amount), category, note))
     conn.commit()
     conn.close()
     await update.message.reply_text(f'Добавлен расход: {category} {amount} ₽ {note}')
@@ -158,7 +158,8 @@ async def income_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ts = now_iso()
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute('INSERT INTO transactions(user_id, ts, amount, category, note) VALUES (?,?,?,?,?)', (user.id, ts, amount, 'доход', note))
+    cur.execute('INSERT INTO transactions(user_id, ts, amount, category, note) VALUES (?,?,?,?,?)', 
+                (user.id, ts, amount, 'доход', note))
     conn.commit()
     conn.close()
     await update.message.reply_text(f'Добавлен доход: {amount} ₽ {note}')
@@ -179,7 +180,8 @@ async def setbudget_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     month = datetime.datetime.now().strftime('%Y-%m')
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute('INSERT INTO budgets(user_id, month, category, limit) VALUES (?,?,?,?)', (user.id, month, category, limit))
+    cur.execute('INSERT OR REPLACE INTO budgets(user_id, month, category, budget_limit) VALUES (?,?,?,?)', 
+                (user.id, month, category, limit))
     conn.commit()
     conn.close()
     await update.message.reply_text(f'Установлен лимит {limit} ₽ на {category} за {month}')
@@ -190,12 +192,13 @@ async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     month = datetime.datetime.now().strftime('%Y-%m')
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    # суммируем транзакции за месяц по категориям
-    cur.execute("SELECT category, SUM(amount) FROM transactions WHERE user_id=? AND substr(ts,1,7)=? GROUP BY category", (user.id, month))
+    cur.execute("SELECT category, SUM(amount) FROM transactions WHERE user_id=? AND substr(ts,1,7)=? GROUP BY category", 
+                (user.id, month))
     rows = cur.fetchall()
-    cur.execute('SELECT category, limit FROM budgets WHERE user_id=? AND month=?', (user.id, month))
+    cur.execute('SELECT category, budget_limit FROM budgets WHERE user_id=? AND month=?', (user.id, month))
     budgets = {r[0]: r[1] for r in cur.fetchall()}
     conn.close()
+    
     total = sum(r[1] for r in rows) if rows else 0
     text_lines = [f'Баланс за {month}: {total:.2f} ₽', 'По категориям:']
     for cat, s in rows:
@@ -216,7 +219,8 @@ async def report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         month = datetime.datetime.now().strftime('%Y-%m')
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute('SELECT ts, amount, category, note FROM transactions WHERE user_id=? AND substr(ts,1,7)=? ORDER BY ts', (user.id, month))
+    cur.execute('SELECT ts, amount, category, note FROM transactions WHERE user_id=? AND substr(ts,1,7)=? ORDER BY ts', 
+                (user.id, month))
     rows = cur.fetchall()
     conn.close()
     if not rows:
@@ -241,7 +245,8 @@ async def export_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         month = datetime.datetime.now().strftime('%Y-%m')
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute('SELECT ts, amount, category, note FROM transactions WHERE user_id=? AND substr(ts,1,7)=? ORDER BY ts', (user.id, month))
+    cur.execute('SELECT ts, amount, category, note FROM transactions WHERE user_id=? AND substr(ts,1,7)=? ORDER BY ts', 
+                (user.id, month))
     rows = cur.fetchall()
     conn.close()
     if not rows:
@@ -253,7 +258,10 @@ async def export_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for r in rows:
         writer.writerow(r)
     output.seek(0)
-    await update.message.reply_document(document=io.BytesIO(output.getvalue().encode('utf-8')), filename=f'transactions_{month}.csv')
+    await update.message.reply_document(
+        document=io.BytesIO(output.getvalue().encode('utf-8')), 
+        filename=f'transactions_{month}.csv'
+    )
 
 async def unknown_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('Я понимаю команды: /add, /income, /balance, /report, /categories, /setbudget, /export')
@@ -266,7 +274,8 @@ def main():
     if not token:
         print('Error: set BOT_TOKEN environment variable')
         return
-    app = ApplicationBuilder().token(token).build()
+    
+    app = Application.builder().token(token).build()
 
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('help', help_cmd))
