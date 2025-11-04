@@ -4,6 +4,8 @@ import datetime
 import csv
 import io
 import pytz
+import threading
+from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -12,6 +14,21 @@ DEFAULT_CATEGORIES = [
     'еда', 'кафе', 'покупки', 'коммуналка', 'такси', 'спорт', 'медицина', 'другое'
 ]
 TIMEZONE = 'Europe/Amsterdam'
+
+# Создаем Flask app для открытия порта
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Telegram Bot is running!"
+
+@app.route('/health')
+def health():
+    return "OK"
+
+def run_flask():
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
 
 # ---------- Database helpers ----------
 
@@ -275,23 +292,29 @@ def main():
         print('Error: set BOT_TOKEN environment variable')
         return
     
-    app = Application.builder().token(token).build()
+    # Запускаем Flask в отдельном потоке
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    
+    # Запускаем Telegram бота
+    app_bot = Application.builder().token(token).build()
 
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(CommandHandler('help', help_cmd))
-    app.add_handler(CommandHandler('categories', categories_cmd))
-    app.add_handler(CommandHandler('addcat', addcat_cmd))
-    app.add_handler(CommandHandler('add', add_cmd))
-    app.add_handler(CommandHandler('income', income_cmd))
-    app.add_handler(CommandHandler('setbudget', setbudget_cmd))
-    app.add_handler(CommandHandler('balance', balance_cmd))
-    app.add_handler(CommandHandler('report', report_cmd))
-    app.add_handler(CommandHandler('export', export_cmd))
+    app_bot.add_handler(CommandHandler('start', start))
+    app_bot.add_handler(CommandHandler('help', help_cmd))
+    app_bot.add_handler(CommandHandler('categories', categories_cmd))
+    app_bot.add_handler(CommandHandler('addcat', addcat_cmd))
+    app_bot.add_handler(CommandHandler('add', add_cmd))
+    app_bot.add_handler(CommandHandler('income', income_cmd))
+    app_bot.add_handler(CommandHandler('setbudget', setbudget_cmd))
+    app_bot.add_handler(CommandHandler('balance', balance_cmd))
+    app_bot.add_handler(CommandHandler('report', report_cmd))
+    app_bot.add_handler(CommandHandler('export', export_cmd))
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_message))
+    app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_message))
 
-    print('Bot started...')
-    app.run_polling()
+    print('Bot started with HTTP server...')
+    app_bot.run_polling()
 
 if __name__ == '__main__':
     main()
